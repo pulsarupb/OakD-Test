@@ -156,13 +156,22 @@ def main():
         )
 
         stereo = pipeline.create(dai.node.StereoDepth)
-        stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.FAST_DENSITY)
+        stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DETAIL)
         stereo.setDepthAlign(dai.CameraBoardSocket.CAM_A)
         stereo.setOutputSize(DEPTH_W, DEPTH_H)
 
         stereo.setLeftRightCheck(True)
         stereo.setSubpixel(True)
-        stereo.initialConfig.setConfidenceThreshold(160)
+
+        cfg = stereo.initialConfig
+        cfg.costMatching.confidenceThreshold = 55
+        cfg.postProcessing.speckleFilter.enable = True
+        cfg.postProcessing.speckleFilter.speckleRange = 200
+        cfg.postProcessing.spatialFilter.enable = True
+        cfg.postProcessing.spatialFilter.holeFillingRadius = 2
+        cfg.postProcessing.spatialFilter.numIterations = 1
+        cfg.postProcessing.thresholdFilter.minRange = 300
+        cfg.postProcessing.thresholdFilter.maxRange = 20000
 
         left_out.link(stereo.left)
         right_out.link(stereo.right)
