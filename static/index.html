@@ -75,6 +75,8 @@ const wsUrl = `ws://${location.host}/ws`
 let ws
 let reconnectTimer
 let selectedMxid = null
+let camMeta = {}
+let blobUrls = {}
 
 function onMainView(mxid) {
   document.getElementById('main-empty').style.display = 'none'
@@ -88,19 +90,25 @@ function showEmpty() {
   document.getElementById('main-metrics').style.display = 'none'
 }
 
+function updateImage(imgId, data) {
+  const el = document.getElementById(imgId)
+  if (blobUrls[imgId]) URL.revokeObjectURL(blobUrls[imgId])
+  if (data) {
+    const blob = new Blob([data], {type: 'image/jpeg'})
+    blobUrls[imgId] = URL.createObjectURL(blob)
+    el.src = blobUrls[imgId]
+  }
+}
+
 function selectCamera(mxid) {
   selectedMxid = mxid
   document.querySelectorAll('.thumb-card').forEach(c => c.classList.toggle('selected', c.dataset.mxid === mxid))
-  const cam = allFrames[mxid]
-  if (cam) {
+  const meta = camMeta[mxid]
+  if (meta) {
     onMainView(mxid)
-    const rgbEl = document.getElementById('main-rgb')
-    const depthEl = document.getElementById('main-depth')
-    if (cam.rgb) rgbEl.src = `data:image/jpeg;base64,${cam.rgb}`
-    if (cam.depth) depthEl.src = `data:image/jpeg;base64,${cam.depth}`
-    document.getElementById('main-min').textContent = cam.min_d
-    document.getElementById('main-avg').textContent = cam.avg_d
-    document.getElementById('main-max').textContent = cam.max_d
+    document.getElementById('main-min').textContent = meta.min_d
+    document.getElementById('main-avg').textContent = meta.avg_d
+    document.getElementById('main-max').textContent = meta.max_d
   } else {
     showEmpty()
   }
@@ -123,52 +131,70 @@ function createThumbnail(mxid, label) {
 function removeThumbnail(mxid) {
   const card = document.getElementById(`thumb-${mxid}`)
   if (card) card.remove()
+  for (const key of ['thumb-rgb-', 'thumb-min-', 'thumb-avg-', 'thumb-max-']) {
+    const id = key + mxid
+    if (key === 'thumb-rgb-' && blobUrls[id]) URL.revokeObjectURL(blobUrls[id])
+    if (key.startsWith('thumb-min-')) continue
+    if (key === 'thumb-rgb-') delete blobUrls[id]
+  }
 }
-
-let allFrames = {}
 
 function connect() {
   ws = new WebSocket(wsUrl)
+  ws.binaryType = 'arraybuffer'
   ws.onopen = () => {
     document.getElementById('status').textContent = 'Connected'
     document.getElementById('status').className = 'status ok'
   }
   ws.onmessage = (e) => {
-    const data = JSON.parse(e.data)
-    allFrames = data
-    for (const [mxid, cam] of Object.entries(data)) {
-      let card = document.getElementById(`thumb-${mxid}`)
-      if (!card) createThumbnail(mxid, cam.label)
-      const thumbRgb = document.getElementById(`thumb-rgb-${mxid}`)
-      if (thumbRgb && cam.rgb) thumbRgb.src = `data:image/jpeg;base64,${cam.rgb}`
-      if (cam.min_d !== undefined) document.getElementById(`thumb-min-${mxid}`).textContent = cam.min_d
-      if (cam.avg_d !== undefined) document.getElementById(`thumb-avg-${mxid}`).textContent = cam.avg_d
-      if (cam.max_d !== undefined) document.getElementById(`thumb-max-${mxid}`).textContent = cam.max_d
-    }
-    // Remove thumbnails for cameras that disappeared
-    document.querySelectorAll('.thumb-card').forEach(card => {
-      if (!(card.dataset.mxid in data)) removeThumbnail(card.dataset.mxid)
-    })
-    // Auto-select first camera if none selected or selected is gone
-    const keys = Object.keys(data)
-    if (keys.length > 0) {
-      if (!selectedMxid || !(selectedMxid in data)) {
-        selectCamera(keys[0])
-      } else {
-        // Update main view for selected camera
-        const cam = data[selectedMxid]
-        if (cam) {
-          const rgbEl = document.getElementById('main-rgb')
-          const depthEl = document.getElementById('main-depth')
-          if (cam.rgb) rgbEl.src = `data:image/jpeg;base64,${cam.rgb}`
-          if (cam.depth) depthEl.src = `data:image/jpeg;base64,${cam.depth}`
-          document.getElementById('main-min').textContent = cam.min_d
-          document.getElementById('main-avg').textContent = cam.avg_d
-          document.getElementById('main-max').textContent = cam.max_d
+    if (typeof e.data === 'string') {
+      const data = JSON.parse(e.data)
+      for (const [mxid, meta] of Object.entries(data)) {
+        camMeta[mxid] = meta
+        let card = document.getElementById(`thumb-${mxid}`)
+        if (!card) createThumbnail(mxid, meta.label)
+        if (meta.depth_seq > 0) {
+          document.getElementById(`thumb-min-${mxid}`).textContent = meta.min_d
+          document.getElementById(`thumb-avg-${mxid}`).textContent = meta.avg_d
+          document.getElementById(`thumb-max-${mxid}`).textContent = meta.max_d
         }
       }
+      document.querySelectorAll('.thumb-card').forEach(card => {
+        if (!(card.dataset.mxid in camMeta)) {
+          removeThumbnail(card.dataset.mxid)
+          delete camMeta[card.dataset.mxid]
+        }
+      })
+      const keys = Object.keys(camMeta)
+      if (keys.length > 0) {
+        if (!selectedMxid || !(selectedMxid in camMeta)) {
+          selectCamera(keys[0])
+        } else {
+          const meta = camMeta[selectedMxid]
+          if (meta) {
+            document.getElementById('main-min').textContent = meta.min_d
+            document.getElementById('main-avg').textContent = meta.avg_d
+            document.getElementById('main-max').textContent = meta.max_d
+          }
+        }
+      } else {
+        showEmpty()
+      }
     } else {
-      showEmpty()
+      const buf = new Uint8Array(e.data)
+      const label = new TextDecoder().decode(buf.slice(0, 6))
+      const type = buf[6]
+      const jpeg = buf.slice(7)
+      const mxid = Object.keys(camMeta).find(k => camMeta[k].label === label)
+      if (!mxid) return
+
+      const thumbId = `thumb-rgb-${mxid}`
+      if (type === 0) {
+        updateImage(thumbId, jpeg)
+        if (selectedMxid === mxid) updateImage('main-rgb', jpeg)
+      } else {
+        if (selectedMxid === mxid) updateImage('main-depth', jpeg)
+      }
     }
   }
   ws.onclose = () => {
