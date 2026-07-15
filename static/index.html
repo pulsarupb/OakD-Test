@@ -6,60 +6,126 @@
 <title>OakD Multi Depth Viewer</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#111;color:#eee;font-family:monospace;padding:20px}
-.container{max-width:100%;margin:0 auto}
-h1{font-size:1.2em;margin-bottom:20px;opacity:.9}
-#cameras-container{display:flex;gap:20px;flex-wrap:wrap}
-.cam-group{flex:1 1 400px;min-width:320px;background:#181818;border-radius:8px;padding:16px;border:1px solid #222}
-.cam-group h2{font-size:1em;margin-bottom:12px;opacity:.8;padding-bottom:8px;border-bottom:1px solid #222}
-.streams{display:flex;gap:12px}
-.stream{flex:1}
-.stream img{width:100%;border-radius:6px;border:1px solid #333;display:block}
-.stream-label{margin-top:4px;font-size:.75em;opacity:.5;text-align:center}
-.metrics{display:flex;gap:12px;margin-top:12px}
-.metric{flex:1;background:#1a1a1a;padding:10px;border-radius:6px;text-align:center}
-.metric-value{font-size:1.4em;font-weight:700}
-.metric-label{font-size:.7em;opacity:.5;margin-top:2px}
-.status{margin-top:16px;padding:10px 16px;border-radius:6px;font-size:.85em}
-.status.ok{background:#0a2a0a;color:#4caf50;border:1px solid #2a5a2a}
-.status.err{background:#2a0a0a;color:#f44336;border:1px solid #5a2a2a}
+body{background:#0d0d0d;color:#eee;font-family:system-ui,-apple-system,sans-serif;padding:16px;min-height:100vh;display:flex;flex-direction:column}
+.container{max-width:1400px;margin:0 auto;width:100%;flex:1;display:flex;flex-direction:column;gap:16px}
+
+/* header */
+header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#151515;border-radius:10px;border:1px solid #222}
+header h1{font-size:1.05em;font-weight:600;opacity:.9;letter-spacing:.02em}
+#status{padding:4px 14px;border-radius:20px;font-size:.75em;font-weight:500}
+#status.ok{background:#0f2e0f;color:#4caf50;border:1px solid #2a5a2a}
+#status.err{background:#2e0f0f;color:#f44336;border:1px solid #5a2a2a}
+
+/* main view */
+.main-view{flex:1;display:flex;flex-direction:column;gap:12px;min-height:0}
+.main-streams{display:flex;gap:12px;flex:1;min-height:0}
+.main-streams .stream{flex:1;display:flex;flex-direction:column;background:#111;border-radius:10px;border:1px solid #222;overflow:hidden;position:relative}
+.main-streams .stream img{width:100%;height:100%;object-fit:contain;display:block;background:#0a0a0a}
+.stream-badge{position:absolute;top:10px;left:10px;background:rgba(0,0,0,.75);padding:4px 10px;border-radius:6px;font-size:.7em;font-weight:500;opacity:.7;pointer-events:none}
+.main-metrics{display:flex;gap:12px}
+.main-metrics .metric{flex:1;background:#151515;padding:12px;border-radius:8px;text-align:center;border:1px solid #222}
+.main-metrics .metric-value{font-size:1.5em;font-weight:700;font-variant-numeric:tabular-nums}
+.main-metrics .metric-label{font-size:.7em;opacity:.5;margin-top:2px}
+
+/* no camera selected */
+.main-empty{flex:1;display:flex;align-items:center;justify-content:center;background:#111;border-radius:10px;border:1px solid #222;color:#555;font-size:.9em}
+
+/* thumbnails */
+.thumbnails{display:flex;gap:10px;padding:4px 0}
+.thumb-card{flex:1;background:#151515;border-radius:8px;border:2px solid #222;padding:8px;cursor:pointer;transition:border-color .15s,background .15s;display:flex;flex-direction:column;gap:6px;min-width:0}
+.thumb-card:hover{border-color:#444;background:#1a1a1a}
+.thumb-card.selected{border-color:#4caf50;background:#0f2e0f}
+.thumb-card img{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:4px;display:block;background:#0a0a0a}
+.thumb-card .thumb-label{font-size:.72em;font-weight:500;opacity:.7;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.thumb-card .thumb-metrics{display:flex;gap:6px;font-size:.65em;opacity:.5;justify-content:center}
+.thumb-card .thumb-metrics span{font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
 <div class="container">
-<h1>OakD Multi Depth Viewer</h1>
-<div id="cameras-container"></div>
-<div class="status err" id="status">Disconnected</div>
+<header>
+  <h1>OakD Multi Depth Viewer</h1>
+  <div id="status" class="status err">Disconnected</div>
+</header>
+
+<div class="main-view" id="main-view">
+  <div class="main-empty" id="main-empty">Select a camera below</div>
+  <div class="main-streams" id="main-streams" style="display:none">
+    <div class="stream">
+      <span class="stream-badge">RGB</span>
+      <img id="main-rgb" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="RGB">
+    </div>
+    <div class="stream">
+      <span class="stream-badge">Depth</span>
+      <img id="main-depth" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Depth">
+    </div>
+  </div>
+  <div class="main-metrics" id="main-metrics" style="display:none">
+    <div class="metric"><div class="metric-value" id="main-min">--</div><div class="metric-label">Min (mm)</div></div>
+    <div class="metric"><div class="metric-value" id="main-avg">--</div><div class="metric-label">Avg (mm)</div></div>
+    <div class="metric"><div class="metric-value" id="main-max">--</div><div class="metric-label">Max (mm)</div></div>
+  </div>
 </div>
+
+<div class="thumbnails" id="thumbnails"></div>
+</div>
+
 <script>
 const wsUrl = `ws://${location.host}/ws`
 let ws
 let reconnectTimer
+let selectedMxid = null
 
-function createCameraElement(mxid, label) {
-  const container = document.getElementById('cameras-container')
-  const group = document.createElement('div')
-  group.className = 'cam-group'
-  group.id = `cam-${mxid}`
-  group.innerHTML = `
-    <h2>Camera ${label}</h2>
-    <div class="streams">
-      <div class="stream">
-        <img id="rgb-${mxid}" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="RGB">
-        <div class="stream-label">RGB Stream</div>
-      </div>
-      <div class="stream">
-        <img id="depth-${mxid}" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Depth">
-        <div class="stream-label">Depth Heatmap</div>
-      </div>
-    </div>
-    <div class="metrics">
-      <div class="metric"><div class="metric-value" id="min-${mxid}">--</div><div class="metric-label">Min (mm)</div></div>
-      <div class="metric"><div class="metric-value" id="avg-${mxid}">--</div><div class="metric-label">Avg (mm)</div></div>
-      <div class="metric"><div class="metric-value" id="max-${mxid}">--</div><div class="metric-label">Max (mm)</div></div>
-    </div>`
-  container.appendChild(group)
+function onMainView(mxid) {
+  document.getElementById('main-empty').style.display = 'none'
+  document.getElementById('main-streams').style.display = 'flex'
+  document.getElementById('main-metrics').style.display = 'flex'
 }
+
+function showEmpty() {
+  document.getElementById('main-empty').style.display = 'flex'
+  document.getElementById('main-streams').style.display = 'none'
+  document.getElementById('main-metrics').style.display = 'none'
+}
+
+function selectCamera(mxid) {
+  selectedMxid = mxid
+  document.querySelectorAll('.thumb-card').forEach(c => c.classList.toggle('selected', c.dataset.mxid === mxid))
+  const cam = allFrames[mxid]
+  if (cam) {
+    onMainView(mxid)
+    const rgbEl = document.getElementById('main-rgb')
+    const depthEl = document.getElementById('main-depth')
+    if (cam.rgb) rgbEl.src = `data:image/jpeg;base64,${cam.rgb}`
+    if (cam.depth) depthEl.src = `data:image/jpeg;base64,${cam.depth}`
+    document.getElementById('main-min').textContent = cam.min_d
+    document.getElementById('main-avg').textContent = cam.avg_d
+    document.getElementById('main-max').textContent = cam.max_d
+  } else {
+    showEmpty()
+  }
+}
+
+function createThumbnail(mxid, label) {
+  const container = document.getElementById('thumbnails')
+  const card = document.createElement('div')
+  card.className = 'thumb-card'
+  card.dataset.mxid = mxid
+  card.id = `thumb-${mxid}`
+  card.innerHTML = `
+    <img id="thumb-rgb-${mxid}" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="">
+    <div class="thumb-label">${label}</div>
+    <div class="thumb-metrics"><span id="thumb-min-${mxid}">--</span> · <span id="thumb-avg-${mxid}">--</span> · <span id="thumb-max-${mxid}">--</span></div>`
+  card.addEventListener('click', () => selectCamera(mxid))
+  container.appendChild(card)
+}
+
+function removeThumbnail(mxid) {
+  const card = document.getElementById(`thumb-${mxid}`)
+  if (card) card.remove()
+}
+
+let allFrames = {}
 
 function connect() {
   ws = new WebSocket(wsUrl)
@@ -69,16 +135,40 @@ function connect() {
   }
   ws.onmessage = (e) => {
     const data = JSON.parse(e.data)
+    allFrames = data
     for (const [mxid, cam] of Object.entries(data)) {
-      let group = document.getElementById(`cam-${mxid}`)
-      if (!group) createCameraElement(mxid, cam.label)
-      const rgbEl = document.getElementById(`rgb-${mxid}`)
-      if (rgbEl && cam.rgb) rgbEl.src = `data:image/jpeg;base64,${cam.rgb}`
-      const depthEl = document.getElementById(`depth-${mxid}`)
-      if (depthEl && cam.depth) depthEl.src = `data:image/jpeg;base64,${cam.depth}`
-      if (cam.min_d !== undefined) document.getElementById(`min-${mxid}`).textContent = cam.min_d
-      if (cam.avg_d !== undefined) document.getElementById(`avg-${mxid}`).textContent = cam.avg_d
-      if (cam.max_d !== undefined) document.getElementById(`max-${mxid}`).textContent = cam.max_d
+      let card = document.getElementById(`thumb-${mxid}`)
+      if (!card) createThumbnail(mxid, cam.label)
+      const thumbRgb = document.getElementById(`thumb-rgb-${mxid}`)
+      if (thumbRgb && cam.rgb) thumbRgb.src = `data:image/jpeg;base64,${cam.rgb}`
+      if (cam.min_d !== undefined) document.getElementById(`thumb-min-${mxid}`).textContent = cam.min_d
+      if (cam.avg_d !== undefined) document.getElementById(`thumb-avg-${mxid}`).textContent = cam.avg_d
+      if (cam.max_d !== undefined) document.getElementById(`thumb-max-${mxid}`).textContent = cam.max_d
+    }
+    // Remove thumbnails for cameras that disappeared
+    document.querySelectorAll('.thumb-card').forEach(card => {
+      if (!(card.dataset.mxid in data)) removeThumbnail(card.dataset.mxid)
+    })
+    // Auto-select first camera if none selected or selected is gone
+    const keys = Object.keys(data)
+    if (keys.length > 0) {
+      if (!selectedMxid || !(selectedMxid in data)) {
+        selectCamera(keys[0])
+      } else {
+        // Update main view for selected camera
+        const cam = data[selectedMxid]
+        if (cam) {
+          const rgbEl = document.getElementById('main-rgb')
+          const depthEl = document.getElementById('main-depth')
+          if (cam.rgb) rgbEl.src = `data:image/jpeg;base64,${cam.rgb}`
+          if (cam.depth) depthEl.src = `data:image/jpeg;base64,${cam.depth}`
+          document.getElementById('main-min').textContent = cam.min_d
+          document.getElementById('main-avg').textContent = cam.avg_d
+          document.getElementById('main-max').textContent = cam.max_d
+        }
+      }
+    } else {
+      showEmpty()
     }
   }
   ws.onclose = () => {
