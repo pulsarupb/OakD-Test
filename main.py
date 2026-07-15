@@ -80,6 +80,11 @@ def camera_loop():
     stereo.setDepthAlign(dai.CameraBoardSocket.CAM_A)
     stereo.setOutputSize(DEPTH_W, DEPTH_H)
     
+    stereo.setLeftRightCheck(True)
+    stereo.setSubpixel(True)
+
+    stereo.initialConfig.setConfidenceThreshold(160)
+    
     left_out.link(stereo.left)
     right_out.link(stereo.right)
 
