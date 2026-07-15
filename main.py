@@ -44,68 +44,80 @@ def array_to_b64(arr: np.ndarray, quality: int = 80) -> str:
 def camera_loop():
     pipeline = dai.Pipeline()
 
-    cam_rgb = pipeline.create(dai.node.ColorCamera)
-    cam_rgb.setBoardSocket(dai.CameraBoardSocket.CAM_A)
-    cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
-    cam_rgb.setIspScale(1, 3)
-    cam_rgb.setFps(FPS)
+    cam_rgb = pipeline.create(dai.node.Camera).build(
+        boardSocket=dai.CameraBoardSocket.CAM_A,
+        sensorFps=FPS
+    )
+    
+    rgb_output = cam_rgb.requestOutput(
+        size=(1920, 1080), 
+        type=dai.ImgFrame.Type.BGR888p, 
+        fps=FPS
+    )
 
-    rgb_out = pipeline.create(dai.node.XLinkOut)
-    rgb_out.setStreamName("rgb")
-    cam_rgb.isp.link(rgb_out.input)
+    left_cam = pipeline.create(dai.node.Camera).build(
+        boardSocket=dai.CameraBoardSocket.CAM_B,
+        sensorFps=FPS
+    )
+    right_cam = pipeline.create(dai.node.Camera).build(
+        boardSocket=dai.CameraBoardSocket.CAM_C,
+        sensorFps=FPS
+    )
 
-    left = pipeline.create(dai.node.MonoCamera)
-    right = pipeline.create(dai.node.MonoCamera)
-    left.setBoardSocket(dai.CameraBoardSocket.CAM_B)
-    right.setBoardSocket(dai.CameraBoardSocket.CAM_C)
-    left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_400_P)
-    right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_400_P)
-    left.setFps(FPS)
-    right.setFps(FPS)
+    left_out = left_cam.requestOutput(
+        size=(640, 400), 
+        type=dai.ImgFrame.Type.GRAY8, 
+        fps=FPS
+    )
+    right_out = right_cam.requestOutput(
+        size=(640, 400), 
+        type=dai.ImgFrame.Type.GRAY8, 
+        fps=FPS
+    )
 
     stereo = pipeline.create(dai.node.StereoDepth)
-    stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
+    stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.FAST_DENSITY)
     stereo.setDepthAlign(dai.CameraBoardSocket.CAM_A)
     stereo.setOutputSize(DEPTH_W, DEPTH_H)
-    left.out.link(stereo.left)
-    right.out.link(stereo.right)
+    
+    left_out.link(stereo.left)
+    right_out.link(stereo.right)
 
-    depth_out = pipeline.create(dai.node.XLinkOut)
-    depth_out.setStreamName("depth")
-    stereo.depth.link(depth_out.input)
+    q_rgb = rgb_output.createOutputQueue(maxSize=1, blocking=False)
+    q_depth = stereo.depth.createOutputQueue(maxSize=1, blocking=False)
 
-    with dai.Device(pipeline) as device:
-        q_rgb = device.getOutputQueue("rgb", maxSize=1, blocking=False)
-        q_depth = device.getOutputQueue("depth", maxSize=1, blocking=False)
+    pipeline.start()
 
-        while True:
-            rgb_frame = q_rgb.get()
-            depth_frame = q_depth.get()
+    with pipeline:
+        while pipeline.isRunning():
+            if q_rgb.has() and q_depth.has():
+                rgb_frame = q_rgb.get()
+                depth_frame = q_depth.get()
 
-            rgb = rgb_frame.getCvFrame()[:, :, ::-1]
-            depth_raw = depth_frame.getFrame()
+                rgb = rgb_frame.getCvFrame()[:, :, ::-1]
+                depth_raw = depth_frame.getFrame()
 
-            valid = depth_raw < 65535
-            if valid.any():
-                max_val = np.percentile(depth_raw[valid], 95)
-                norm = np.clip(
-                    depth_raw.astype(np.float32) / max_val * 255, 0, 255
-                ).astype(np.uint8)
-                heatmap = jet_colormap(norm)
-            else:
-                heatmap = np.zeros((DEPTH_H, DEPTH_W, 3), dtype=np.uint8)
+                valid = depth_raw < 65535
+                if valid.any():
+                    max_val = np.percentile(depth_raw[valid], 95)
+                    norm = np.clip(
+                        depth_raw.astype(np.float32) / max_val * 255, 0, 255
+                    ).astype(np.uint8)
+                    heatmap = jet_colormap(norm)
+                else:
+                    heatmap = np.zeros((DEPTH_H, DEPTH_W, 3), dtype=np.uint8)
 
-            rgb_b64 = array_to_b64(rgb)
-            depth_b64 = array_to_b64(heatmap)
+                rgb_b64 = array_to_b64(rgb)
+                depth_b64 = array_to_b64(heatmap)
 
-            with frame_lock:
-                latest_frames.update(
-                    rgb=rgb_b64,
-                    depth=depth_b64,
-                    min_d=int(depth_raw[valid].min()) if valid.any() else 0,
-                    max_d=int(depth_raw[valid].max()) if valid.any() else 0,
-                    avg_d=int(depth_raw[valid].mean()) if valid.any() else 0,
-                )
+                with frame_lock:
+                    latest_frames.update(
+                        rgb=rgb_b64,
+                        depth=depth_b64,
+                        min_d=int(depth_raw[valid].min()) if valid.any() else 0,
+                        max_d=int(depth_raw[valid].max()) if valid.any() else 0,
+                        avg_d=int(depth_raw[valid].mean()) if valid.any() else 0,
+                    )
 
 
 app = FastAPI()
