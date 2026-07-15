@@ -50,7 +50,7 @@ def camera_loop(mxid: str, pipeline: dai.Pipeline, q_rgb, q_depth):
                 rgb_frame = q_rgb.get()
                 depth_frame = q_depth.get()
 
-                rgb = rgb_frame.getCvFrame()[:, :, ::-1]
+                rgb = np.rot90(rgb_frame.getCvFrame()[:, :, ::-1], 2)
                 depth_raw = depth_frame.getFrame()
 
                 valid = depth_raw < 65535
@@ -59,9 +59,9 @@ def camera_loop(mxid: str, pipeline: dai.Pipeline, q_rgb, q_depth):
                     norm = np.clip(
                         depth_raw.astype(np.float32) / max_val * 255, 0, 255
                     ).astype(np.uint8)
-                    heatmap = jet_colormap(norm)
+                    heatmap = np.rot90(jet_colormap(norm), 2)
                 else:
-                    heatmap = np.zeros((DEPTH_H, DEPTH_W, 3), dtype=np.uint8)
+                    heatmap = np.rot90(np.zeros((DEPTH_H, DEPTH_W, 3), dtype=np.uint8), 2)
 
                 rgb_b64 = array_to_b64(rgb)
                 depth_b64 = array_to_b64(heatmap)
