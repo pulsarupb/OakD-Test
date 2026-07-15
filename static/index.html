@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>OakD Depth Viewer</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#111;color:#eee;font-family:monospace;padding:20px}
+.container{max-width:1400px;margin:0 auto}
+h1{font-size:1.2em;margin-bottom:20px;opacity:.9}
+.streams{display:flex;gap:20px;flex-wrap:wrap}
+.stream{flex:1;min-width:320px}
+.stream img{width:100%;border-radius:8px;border:1px solid #333;display:block}
+.stream-label{margin-top:8px;font-size:.85em;opacity:.6}
+.metrics{display:flex;gap:16px;margin-top:20px;flex-wrap:wrap}
+.metric{background:#1a1a1a;padding:16px 24px;border-radius:8px;text-align:center;min-width:120px;flex:1}
+.metric-value{font-size:2em;font-weight:700}
+.metric-label{font-size:.75em;opacity:.5;margin-top:4px}
+.status{margin-top:16px;padding:10px 16px;border-radius:6px;font-size:.85em}
+.status.ok{background:#0a2a0a;color:#4caf50;border:1px solid #2a5a2a}
+.status.err{background:#2a0a0a;color:#f44336;border:1px solid #5a2a2a}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>OakD Depth Viewer</h1>
+<div class="streams">
+<div class="stream">
+<img id="rgb-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="RGB">
+<div class="stream-label">RGB Stream</div>
+</div>
+<div class="stream">
+<img id="depth-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Depth">
+<div class="stream-label">Depth Heatmap</div>
+</div>
+</div>
+<div class="metrics">
+<div class="metric"><div class="metric-value" id="min-depth">--</div><div class="metric-label">Min (mm)</div></div>
+<div class="metric"><div class="metric-value" id="avg-depth">--</div><div class="metric-label">Avg (mm)</div></div>
+<div class="metric"><div class="metric-value" id="max-depth">--</div><div class="metric-label">Max (mm)</div></div>
+</div>
+<div class="status err" id="status">Disconnected</div>
+</div>
+<script>
+const wsUrl = `ws://${location.host}/ws`
+let ws
+let reconnectTimer
+
+function connect() {
+  ws = new WebSocket(wsUrl)
+  ws.onopen = () => {
+    document.getElementById('status').textContent = 'Connected'
+    document.getElementById('status').className = 'status ok'
+  }
+  ws.onmessage = (e) => {
+    const d = JSON.parse(e.data)
+    if (d.rgb) document.getElementById('rgb-img').src = `data:image/jpeg;base64,${d.rgb}`
+    if (d.depth) document.getElementById('depth-img').src = `data:image/jpeg;base64,${d.depth}`
+    if (d.min_d !== undefined) document.getElementById('min-depth').textContent = d.min_d
+    if (d.avg_d !== undefined) document.getElementById('avg-depth').textContent = d.avg_d
+    if (d.max_d !== undefined) document.getElementById('max-depth').textContent = d.max_d
+  }
+  ws.onclose = () => {
+    document.getElementById('status').textContent = 'Disconnected \u2014 reconnecting...'
+    document.getElementById('status').className = 'status err'
+    clearTimeout(reconnectTimer)
+    reconnectTimer = setTimeout(connect, 2000)
+  }
+}
+connect()
+</script>
+</body>
+</html>

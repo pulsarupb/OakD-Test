@@ -1,0 +1,12 @@
+[project]
+name = "oakd-depth-webserver"
+version = "0.1.0"
+description = "OakD depth camera viewer with web UI"
+requires-python = ">=3.9"
+dependencies = [
+    "depthai>=2.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.20.0",
+    "numpy>=1.21.0",
+    "Pillow>=9.0.0",
+]
