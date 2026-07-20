@@ -3,7 +3,9 @@ import sys
 import threading
 import time
 
+import cv2
 import depthai as dai
+import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -25,6 +27,7 @@ def camera_loop(mxid: str, pipeline: dai.Pipeline, q_rgb, q_depth, q_meta):
         while pipeline.isRunning():
             got_any = False
 
+            # --- 1. RGB (Encoded on OAK-D) ---
             if q_rgb.has():
                 got_any = True
                 enc_frame = q_rgb.get()
@@ -39,20 +42,29 @@ def camera_loop(mxid: str, pipeline: dai.Pipeline, q_rgb, q_depth, q_meta):
                     d['rgb_seq'] = rgb_seq
                 frame_ready.set()
 
+            # --- 2. Disparity (Encoded on Jetson) ---
             if q_depth.has():
                 got_any = True
-                depth_enc = q_depth.get()
-                depth_jpeg = bytes(depth_enc.getData())
+                disp_frame = q_depth.get()
+                
+                # Convert frame to numpy array and cast explicitly to uint8
+                disp_cv = disp_frame.getCvFrame().astype(np.uint8)
+                
+                # Fast C++ rotation and JPEG compression
+                disp_cv = cv2.rotate(disp_cv, cv2.ROTATE_180)
+                _, depth_buf = cv2.imencode('.jpg', disp_cv, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                
                 depth_seq += 1
                 with frame_lock:
                     d = latest_frames.get(mxid)
                     if d is None:
                         d = {'label': label}
                         latest_frames[mxid] = d
-                    d['depth'] = depth_jpeg
+                    d['depth'] = depth_buf.tobytes()
                     d['depth_seq'] = depth_seq
                 frame_ready.set()
 
+            # --- 3. Metrics (Calculated on OAK-D) ---
             if q_meta.has():
                 got_any = True
                 meta_frame = q_meta.get()
@@ -148,7 +160,7 @@ def main():
 
         pipeline = dai.Pipeline(defaultDevice=device)
 
-        # --- RGB pipeline (unchanged) ---
+        # --- RGB pipeline ---
         cam_rgb = pipeline.create(dai.node.Camera).build(
             boardSocket=dai.CameraBoardSocket.CAM_A,
             sensorFps=FPS,
@@ -208,33 +220,18 @@ def main():
         left_out.link(stereo.left)
         right_out.link(stereo.right)
 
-        # --- Disparity → ImageManip (rotate) → VideoEncoder (MJPEG) ---
-        disp_manip = pipeline.create(dai.node.ImageManip)
-        disp_manip.initialConfig.setRotationDeg(180)
-        stereo.disparity.link(disp_manip.inputImage)
-
-        depth_encoder = pipeline.create(dai.node.VideoEncoder)
-        depth_encoder.setDefaultProfilePreset(FPS, dai.VideoEncoderProperties.Profile.MJPEG)
-        depth_encoder.setQuality(80)
-        disp_manip.out.link(depth_encoder.input)
-
-        # --- Depth → SpatialLocationCalculator → XLinkOut ---
+        # --- Depth → SpatialLocationCalculator (Metrics) ---
         spat_calc = pipeline.create(dai.node.SpatialLocationCalculator)
-        spat_calc.setWaitForConfigInput(False)
         cfg_data = dai.SpatialLocationCalculatorConfigData()
         cfg_data.roi = dai.Rect(dai.Point2f(0, 0), dai.Point2f(1, 1))
         cfg_data.calculationAlgorithm = dai.SpatialLocationCalculatorAlgorithm.MEAN
         spat_calc.initialConfig.addROI(cfg_data)
         stereo.depth.link(spat_calc.inputDepth)
 
-        spat_calc_out = pipeline.create(dai.node.XLinkOut)
-        spat_calc_out.setStreamName("spatialData")
-        spat_calc.spatialData.link(spat_calc_out.input)
-
         # --- Output queues ---
         q_rgb = rgb_encoder.bitstream.createOutputQueue(maxSize=1, blocking=False)
-        q_depth = depth_encoder.bitstream.createOutputQueue(maxSize=1, blocking=False)
-        q_meta = spat_calc_out.output.createOutputQueue(maxSize=1, blocking=False)
+        q_depth = stereo.disparity.createOutputQueue(maxSize=1, blocking=False)
+        q_meta = spat_calc.out.createOutputQueue(maxSize=1, blocking=False)
 
         pipeline.start()
         threads_data.append((mxid, pipeline, q_rgb, q_depth, q_meta))
@@ -248,7 +245,6 @@ def main():
         t.start()
 
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
-
 
 if __name__ == "__main__":
     main()
