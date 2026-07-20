@@ -7,7 +7,5 @@ dependencies = [
     "depthai>=2.0.0",
     "fastapi>=0.100.0",
     "uvicorn[standard]>=0.20.0",
-    "numpy>=1.21.0",
     "Pillow>=9.0.0",
-    "opencv-python>=5.0.0.93",
 ]

@@ -4,8 +4,6 @@ import threading
 import time
 
 import depthai as dai
-import numpy as np
-import cv2
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -18,25 +16,8 @@ latest_frames: dict[str, dict] = {}
 frame_lock = threading.Lock()
 frame_ready = threading.Event()
 
-_JET = np.array([
-    [0, 0, 128],
-    [0, 0, 255],
-    [0, 128, 255],
-    [0, 255, 255],
-    [128, 255, 128],
-    [255, 255, 0],
-    [255, 128, 0],
-    [255, 0, 0],
-    [128, 0, 0],
-], dtype=np.uint8)
 
-
-def jet_colormap(gray: np.ndarray) -> np.ndarray:
-    idx = (gray.astype(np.float32) / 255 * (_JET.shape[0] - 1)).astype(np.uint8)
-    return _JET[idx]
-
-
-def camera_loop(mxid: str, pipeline: dai.Pipeline, q_enc, q_depth):
+def camera_loop(mxid: str, pipeline: dai.Pipeline, q_rgb, q_depth, q_meta):
     label = mxid[-6:]
     rgb_seq = 0
     depth_seq = 0
@@ -44,9 +25,9 @@ def camera_loop(mxid: str, pipeline: dai.Pipeline, q_enc, q_depth):
         while pipeline.isRunning():
             got_any = False
 
-            if q_enc.has():
+            if q_rgb.has():
                 got_any = True
-                enc_frame = q_enc.get()
+                enc_frame = q_rgb.get()
                 rgb_seq += 1
                 rgb_jpeg = bytes(enc_frame.getData())
                 with frame_lock:
@@ -60,35 +41,32 @@ def camera_loop(mxid: str, pipeline: dai.Pipeline, q_enc, q_depth):
 
             if q_depth.has():
                 got_any = True
-                depth_frame = q_depth.get()
-                depth_raw = depth_frame.getFrame()
-
-                valid = depth_raw < 65535
-                if valid.any():
-                    max_val = np.percentile(depth_raw[valid], 95) or 1
-                    norm = np.clip(
-                        depth_raw.astype(np.float32) / max_val * 255, 0, 255
-                    ).astype(np.uint8)
-                    heatmap = cv2.rotate(jet_colormap(norm), cv2.ROTATE_180)
-                else:
-                    heatmap = np.zeros((DEPTH_H, DEPTH_W, 3), dtype=np.uint8)
-
-                _, depth_buf = cv2.imencode('.jpg', heatmap, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                depth_jpeg = depth_buf.tobytes()
+                depth_enc = q_depth.get()
+                depth_jpeg = bytes(depth_enc.getData())
                 depth_seq += 1
-
                 with frame_lock:
                     d = latest_frames.get(mxid)
                     if d is None:
                         d = {'label': label}
                         latest_frames[mxid] = d
-                    d.update(
-                        depth=depth_jpeg, depth_seq=depth_seq,
-                        min_d=int(depth_raw[valid].min()) if valid.any() else 0,
-                        max_d=int(depth_raw[valid].max()) if valid.any() else 0,
-                        avg_d=int(depth_raw[valid].mean()) if valid.any() else 0,
-                    )
+                    d['depth'] = depth_jpeg
+                    d['depth_seq'] = depth_seq
                 frame_ready.set()
+
+            if q_meta.has():
+                got_any = True
+                meta_frame = q_meta.get()
+                spatial_data = meta_frame.getSpatialLocations()
+                if spatial_data:
+                    sd = spatial_data[0]
+                    with frame_lock:
+                        d = latest_frames.get(mxid)
+                        if d is None:
+                            d = {'label': label}
+                            latest_frames[mxid] = d
+                        d['min_d'] = int(sd.depthMin)
+                        d['max_d'] = int(sd.depthMax)
+                        d['avg_d'] = int(sd.depthAverage)
 
             if not got_any:
                 time.sleep(0.001)
@@ -170,6 +148,7 @@ def main():
 
         pipeline = dai.Pipeline(defaultDevice=device)
 
+        # --- RGB pipeline (unchanged) ---
         cam_rgb = pipeline.create(dai.node.Camera).build(
             boardSocket=dai.CameraBoardSocket.CAM_A,
             sensorFps=FPS,
@@ -182,11 +161,12 @@ def main():
             fps=FPS,
         )
 
-        encoder = pipeline.create(dai.node.VideoEncoder)
-        encoder.setDefaultProfilePreset(FPS, dai.VideoEncoderProperties.Profile.MJPEG)
-        encoder.setQuality(80)
-        rgb_raw.link(encoder.input)
+        rgb_encoder = pipeline.create(dai.node.VideoEncoder)
+        rgb_encoder.setDefaultProfilePreset(FPS, dai.VideoEncoderProperties.Profile.MJPEG)
+        rgb_encoder.setQuality(80)
+        rgb_raw.link(rgb_encoder.input)
 
+        # --- Stereo pipeline ---
         left_cam = pipeline.create(dai.node.Camera).build(
             boardSocket=dai.CameraBoardSocket.CAM_B,
             sensorFps=FPS,
@@ -213,7 +193,7 @@ def main():
         stereo.setOutputSize(DEPTH_W, DEPTH_H)
 
         stereo.setLeftRightCheck(True)
-        stereo.setSubpixel(True)
+        stereo.setSubpixel(False)
 
         cfg = stereo.initialConfig
         cfg.costMatching.confidenceThreshold = 55
@@ -228,19 +208,43 @@ def main():
         left_out.link(stereo.left)
         right_out.link(stereo.right)
 
-        q_enc = encoder.bitstream.createOutputQueue(maxSize=1, blocking=False)
-        q_depth = stereo.depth.createOutputQueue(maxSize=1, blocking=False)
+        # --- Disparity → ImageManip (rotate) → VideoEncoder (MJPEG) ---
+        disp_manip = pipeline.create(dai.node.ImageManip)
+        disp_manip.initialConfig.setRotationDeg(180)
+        stereo.disparity.link(disp_manip.inputImage)
+
+        depth_encoder = pipeline.create(dai.node.VideoEncoder)
+        depth_encoder.setDefaultProfilePreset(FPS, dai.VideoEncoderProperties.Profile.MJPEG)
+        depth_encoder.setQuality(80)
+        disp_manip.out.link(depth_encoder.input)
+
+        # --- Depth → SpatialLocationCalculator → XLinkOut ---
+        spat_calc = pipeline.create(dai.node.SpatialLocationCalculator)
+        spat_calc.setWaitForConfigInput(False)
+        cfg_data = dai.SpatialLocationCalculatorConfigData()
+        cfg_data.roi = dai.Rect(dai.Point2f(0, 0), dai.Point2f(1, 1))
+        cfg_data.calculationAlgorithm = dai.SpatialLocationCalculatorAlgorithm.MEAN
+        spat_calc.initialConfig.addROI(cfg_data)
+        stereo.depth.link(spat_calc.inputDepth)
+
+        spat_calc_out = pipeline.create(dai.node.XLinkOut)
+        spat_calc_out.setStreamName("spatialData")
+        spat_calc.spatialData.link(spat_calc_out.input)
+
+        # --- Output queues ---
+        q_rgb = rgb_encoder.bitstream.createOutputQueue(maxSize=1, blocking=False)
+        q_depth = depth_encoder.bitstream.createOutputQueue(maxSize=1, blocking=False)
+        q_meta = spat_calc_out.output.createOutputQueue(maxSize=1, blocking=False)
 
         pipeline.start()
-
-        threads_data.append((mxid, pipeline, q_enc, q_depth))
+        threads_data.append((mxid, pipeline, q_rgb, q_depth, q_meta))
 
     if not threads_data:
         print("No devices could be opened")
         sys.exit(1)
 
-    for mxid, pipeline, q_enc, q_depth in threads_data:
-        t = threading.Thread(target=camera_loop, args=(mxid, pipeline, q_enc, q_depth), daemon=True)
+    for mxid, pipeline, q_rgb, q_depth, q_meta in threads_data:
+        t = threading.Thread(target=camera_loop, args=(mxid, pipeline, q_rgb, q_depth, q_meta), daemon=True)
         t.start()
 
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
