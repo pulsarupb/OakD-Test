@@ -42,17 +42,26 @@ def camera_loop(mxid: str, pipeline: dai.Pipeline, q_rgb, q_depth, q_meta):
                     d['rgb_seq'] = rgb_seq
                 frame_ready.set()
 
-            # --- 2. Disparity (Encoded on Jetson) ---
+            # --- 2. Disparity (Colormapped on Jetson) ---
             if q_depth.has():
                 got_any = True
                 disp_frame = q_depth.get()
                 
-                # Convert frame to numpy array and cast explicitly to uint8
-                disp_cv = disp_frame.getCvFrame().astype(np.uint8)
-                
-                # Fast C++ rotation and JPEG compression
-                disp_cv = cv2.rotate(disp_cv, cv2.ROTATE_180)
-                _, depth_buf = cv2.imencode('.jpg', disp_cv, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                disp_cv = disp_frame.getCvFrame()
+                valid = disp_cv > 0
+
+                disp_norm = np.zeros(disp_cv.shape, dtype=np.uint8)
+                if valid.any():
+                    lo, hi = disp_cv[valid].min(), disp_cv[valid].max()
+                    if lo < hi:
+                        disp_norm[valid] = ((disp_cv[valid].astype(np.float32) - lo) * 255 / (hi - lo)).astype(np.uint8)
+                    else:
+                        disp_norm[valid] = 128
+
+                disp_colored = cv2.applyColorMap(disp_norm, cv2.COLORMAP_JET)
+                disp_colored[~valid] = (255, 0, 255)  # magenta = no depth data
+                disp_colored = cv2.rotate(disp_colored, cv2.ROTATE_180)
+                _, depth_buf = cv2.imencode('.jpg', disp_colored, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 
                 depth_seq += 1
                 with frame_lock:

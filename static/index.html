@@ -50,6 +50,7 @@
       </body>
       </html>:block;background:#0a0a0a}
       .stream-badge{position:absolute;top:10px;left:10px;background:rgba(0,0,0,.75);padding:4px 10px;border-radius:6px;font-size:.7em;font-weight:500;opacity:.7;pointer-events:none}
+      .colorbar{position:absolute;bottom:10px;left:10px;right:10px;height:10px;border-radius:4px;background:linear-gradient(90deg,#000080,#0000ff,#00ffff,#00ff00,#ffff00,#ff8000,#ff0000);opacity:.7;pointer-events:none}
       .main-metrics{display:flex;gap:12px}
       .main-metrics .metric{flex:1;background:#151515;padding:12px;border-radius:8px;text-align:center;border:1px solid #222}
       .main-metrics .metric-value{font-size:1.5em;font-weight:700;font-variant-numeric:tabular-nums}
@@ -87,13 +88,14 @@
               alt="RGB"
             />
           </div>
-          <div class="stream">
-            <span class="stream-badge">Depth</span>
+          <div class="stream" style="position:relative">
+            <span class="stream-badge">Depth (disparity)</span>
             <img
               id="main-depth"
               src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
               alt="Depth"
             />
+            <div class="colorbar"></div>
           </div>
         </div>
         <div class="main-metrics" id="main-metrics" style="display: none">
